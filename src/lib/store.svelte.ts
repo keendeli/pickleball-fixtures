@@ -66,15 +66,32 @@ export function hasSessionForToday(): boolean {
   return app.session !== null && todayKey(new Date(app.session.startedAt)) === todayKey()
 }
 
-export function startSession(venueId: string, roundCount: number, roundMinutes: number): Session {
+/**
+ * Create a new session. `expectedPlayerIds` are roster ids of the people who
+ * said they were coming; each becomes an attendee with arrived = false so the
+ * Check-in screen lists them under Expected. Unknown or duplicate ids are
+ * ignored. The schedule is generated once at the end.
+ */
+export function startSession(
+  venueId: string,
+  roundCount: number,
+  roundMinutes: number,
+  expectedPlayerIds: string[] = [],
+): Session {
   venueById(venueId) // throws on bad id
+  const rosterIds = new Set(app.roster.map((p) => p.id))
+  const attendees: Attendee[] = []
+  for (const id of expectedPlayerIds) {
+    if (!rosterIds.has(id) || attendees.some((a) => a.playerId === id)) continue
+    attendees.push({ playerId: id, arrived: false })
+  }
   const session: Session = {
     id: newId('s'),
     venueId,
     startedAt: new Date().toISOString(),
     roundCount: Math.max(1, Math.floor(roundCount)),
     roundMinutes: Math.max(1, Math.floor(roundMinutes)),
-    attendees: [],
+    attendees,
     rounds: [],
     currentRound: 0,
     seed: newSeed(),

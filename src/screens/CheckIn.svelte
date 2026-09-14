@@ -163,13 +163,4 @@
   .counts span {
     font-size: 0.85rem;
   }
-  .toggle {
-    min-width: 7.5rem;
-  }
-  .toggle.on {
-    background: var(--accent-soft);
-    border-color: var(--accent);
-    color: var(--fg);
-    font-weight: 600;
-  }
 </style>

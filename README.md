@@ -68,8 +68,11 @@ toggling a player off and on again gives the same fixtures back.
 
 ## Screens
 
-1. **Start** — pick a venue, set rounds and minutes, start. Offers Resume if a
-   session is stored. Link to the roster.
+1. **Start** — three numbered steps on one page: (1) pick a venue, set rounds
+   and minutes; (2) tick who is coming today from the club roster shown inline,
+   adding new names as needed; (3) "Start session with N players". Selected
+   players go into the session as Expected. Offers Resume if a session is
+   stored. A small link opens the Roster screen for renames and removals.
 2. **Check-in** — type-ahead add from the roster (a new name is added to the
    roster), big Arrived toggles, counts of arrived / on court / sitting for the
    current round. Players can be added and ticked at any time during the session.
