@@ -1,47 +1,115 @@
-# Svelte + TS + Vite
+# Pickleball Fixtures
 
-This template should help get you started developing with Svelte and TypeScript in Vite.
+An offline-first Progressive Web App for a pickleball club convenor. On a phone or
+tablet at the venue: enter who said they would come, tick people off as they
+arrive, and get 12 rounds of 10-minute doubles fixtures across the courts in use,
+regenerated live as people arrive late or leave early.
 
-## Recommended IDE Setup
+Live: **https://keendeli.github.io/pickleball-fixtures/**
 
-[VS Code](https://code.visualstudio.com/) + [Svelte](https://marketplace.visualstudio.com/items?itemName=svelte.svelte-vscode).
+No backend, no accounts, no analytics. All state lives in `localStorage` on the
+device (one versioned JSON document). The club roster persists across sessions.
+Install it to the home screen and it works with no signal.
 
-## Need an official Svelte framework?
+## Venues
 
-Check out [SvelteKit](https://github.com/sveltejs/kit#readme), which is also powered by Vite. Deploy anywhere with its serverless-first approach and adapt to various platforms, with out of the box support for TypeScript, SCSS, and Less, and easily-added support for mdsvex, GraphQL, PostCSS, Tailwind CSS, and more.
+Venues are fixed in code (`src/lib/venues.ts`):
 
-## Technical considerations
+| id      | Venue                               | Courts |
+| ------- | ----------------------------------- | ------ |
+| `vyc`   | Vonda Youngman Centre               | 2      |
+| `tmshs` | Tamborine Mountain State High School | 3      |
 
-**Why use this over SvelteKit?**
+## Rules
 
-- It brings its own routing solution which might not be preferable for some users.
-- It is first and foremost a framework that just happens to use Vite under the hood, not a Vite app.
+- Doubles only: four players per court, two pairs. Partners rotate every round.
+- Rounds are time based, no scores. Default 12 rounds of 10 minutes; both are
+  editable when starting a session.
+- Courts used per round = `min(venue courts, floor(active players / 4))`.
+  Tamborine has 3 courts but with 11 players only 2 are used; with 7 only 1.
+  With fewer than 4 active players no court is used and the screen says so.
+- Everyone not on a court sits out that round.
+- Fairness priorities, in order: equalise games played across the session,
+  avoid repeating a partner, avoid repeating an opponent.
+- A round that has been started or finished is frozen. When attendance changes,
+  only rounds not yet started are recomputed, carrying forward games played
+  and partner/opponent history from the frozen rounds.
+- "Rest" applies to one round and then clears. "Left" removes a player from
+  every later round (and can be undone from Check-in).
+- The convenor can swap any two players within a round (including someone
+  sitting out) and lock a round so regeneration leaves it alone. A swap on a
+  not-yet-started round locks it automatically, otherwise the next
+  regeneration would undo it.
 
-This template contains as little as possible to get started with Vite + TypeScript + Svelte, while taking into account the developer experience with regards to HMR and intellisense. It demonstrates capabilities on par with the other `create-vite` templates and is a good starting point for beginners dipping their toes into a Vite + Svelte project.
+## How the scheduler decides
 
-Should you later need the extended capabilities and extensibility provided by SvelteKit, the template has been structured similarly to SvelteKit so that it is easy to migrate.
+`src/lib/scheduler.ts` is pure TypeScript with no DOM or storage dependency.
 
-**Why `global.d.ts` instead of `compilerOptions.types` inside `jsconfig.json` or `tsconfig.json`?**
+1. **Who is active** for round *n*: arrived, has not left before *n*, and is not
+   resting for *n*.
+2. **Courts used**: the formula above.
+3. **Who plays**: players are ranked by fewest games played so far, then by who
+   sat out most recently (so sit-outs are spread evenly and nobody sits twice
+   in a row while others have not sat at all), then a seeded random
+   tie-break. The top `4 × courts` play; the rest sit.
+4. **Pairing**: the playing set is arranged into courts and pairs by a small
+   local search: several random arrangements, each improved by swapping any two
+   positions while that lowers the penalty. Penalty = 10 per repeated partner
+   pairing + 3 per repeated opponent pairing, summed over history. The lowest
+   penalty arrangement wins.
+5. **Regeneration**: the whole schedule is rebuilt from the facts (attendees +
+   frozen rounds + seed). Frozen rounds are returned untouched; pending rounds
+   are recomputed. The rebuild is run from a handful of seeds and the schedule
+   with the lowest total penalty is kept, which is what gets 8 players through
+   7 rounds with no repeated partner.
 
-Setting `compilerOptions.types` shuts out all other types not explicitly listed in the configuration. Using triple-slash references keeps the default TypeScript setting of accepting type information from the entire workspace, while also adding `svelte` and `vite/client` type information.
+Everything is deterministic for a given seed, so the tests are stable and
+toggling a player off and on again gives the same fixtures back.
 
-**Why include `.vscode/extensions.json`?**
+## Screens
 
-Other templates indirectly recommend extensions via the README, but this file allows VS Code to prompt the user to install the recommended extension upon opening the project.
+1. **Start** — pick a venue, set rounds and minutes, start. Offers Resume if a
+   session is stored. Link to the roster.
+2. **Check-in** — type-ahead add from the roster (a new name is added to the
+   roster), big Arrived toggles, counts of arrived / on court / sitting for the
+   current round. Players can be added and ticked at any time during the session.
+3. **Rounds** — "Round N of M", one card per court in use, a Sitting out strip,
+   and a countdown with Start / Pause / Next round. Tap a name to swap, rest
+   next round, or mark as left. Earlier rounds are viewable read-only.
+4. **Display** — full-screen large-type view of the current round and timer for
+   a tablet on a table. Requests the Screen Wake Lock where supported. Tap
+   anywhere (or press Escape) to exit.
 
-**Why enable `allowJs` in the TS template?**
+The timer is driven by a stored end timestamp, not an accumulating interval, so
+it survives screen lock and backgrounding. At zero it plays a short synthesised
+beep (Web Audio, no asset) and vibrates where supported.
 
-While `allowJs: false` would indeed prevent the use of `.js` files in the project, it does not prevent the use of JavaScript syntax in `.svelte` files. In addition, it would force `checkJs: false`, bringing the worst of both worlds: not being able to guarantee the entire codebase is TypeScript, and also having worse typechecking for the existing JavaScript. In addition, there are valid use cases in which a mixed codebase may be relevant.
+## Run locally
 
-**Why is HMR not preserving my local component state?**
-
-HMR state preservation comes with a number of gotchas! It has been disabled by default in both `svelte-hmr` and `@sveltejs/vite-plugin-svelte` due to its often surprising behavior. You can read the details [here](https://github.com/rixo/svelte-hmr#svelte-hmr).
-
-If you have state that's important to retain within a component, consider creating an external store which would not be replaced by HMR.
-
-```ts
-// store.ts
-// An extremely simple external store
-import { writable } from 'svelte/store'
-export default writable(0)
+```sh
+npm ci
+npm run dev        # http://localhost:5173/pickleball-fixtures/
+npm test           # vitest
+npm run check      # svelte-check + tsc
+npm run build      # production build into dist/
+npm run preview    # serve dist/ (service worker and manifest included)
+npm run icons      # regenerate the PNG icons in public/
 ```
+
+Stack: Vite, Svelte 5 (runes), TypeScript, vite-plugin-pwa (Workbox, auto
+update), Vitest.
+
+## Deploys
+
+Push to `main` → GitHub Actions (`.github/workflows/deploy.yml`) runs
+`npm ci`, `npm test`, `npm run check`, `npm run build`, uploads `dist/` as a
+Pages artifact and deploys it. GitHub Pages is configured with the
+"GitHub Actions" build type; nothing is served from a branch. Vite's `base` is
+`/pickleball-fixtures/` so assets and the service worker resolve on Pages.
+
+## Data model
+
+Stored facts only; anything derivable is recomputed. See `src/lib/types.ts`:
+`Player`, `Venue`, `Session` (attendees with `arrived`, `leftAfterRound`,
+`restingRound`; rounds with `status`, `locked`, `courts`, `sitting`, `endsAt`).
+The document carries a `schemaVersion` for future migrations.
