@@ -1,14 +1,19 @@
 import { describe, expect, it } from 'vitest'
 import type { Attendee, Round } from './types'
 import {
+  OPEN_SLOT,
   activePlayersForRound,
   courtsUsed,
+  emptyHistory,
   gamesPlayed,
+  historyBefore,
   pairKey,
   playersOnCourt,
   rebuildSchedule,
+  substituteInRound,
   swapPlayers,
 } from './scheduler'
+import { mulberry32 } from './rng'
 
 function attendees(n: number, opts: Partial<Attendee> = {}): Attendee[] {
   return Array.from({ length: n }, (_, i) => ({ playerId: `p${i + 1}`, arrived: true, ...opts }))
@@ -201,6 +206,7 @@ describe('swapPlayers', () => {
       locked: false,
       courts: [{ court: 1, teamA: ['a', 'b'], teamB: ['c', 'd'] }],
       sitting: ['e'],
+      substituted: [],
     }
     const swapped = swapPlayers(round, 'b', 'e')
     expect(swapped.courts[0].teamA).toEqual(['a', 'e'])
@@ -218,9 +224,170 @@ describe('swapPlayers', () => {
         { court: 2, teamA: ['e', 'f'], teamB: ['g', 'h'] },
       ],
       sitting: [],
+      substituted: [],
     }
     const swapped = swapPlayers(round, 'a', 'h')
     expect(swapped.courts[0].teamA).toEqual(['h', 'b'])
     expect(swapped.courts[1].teamB).toEqual(['g', 'a'])
+  })
+})
+
+describe('substituteInRound', () => {
+  function without(ids: string[], gone: string): string[] {
+    return ids.filter((p) => p !== gone)
+  }
+
+  it('removing a sitting-out player leaves every court unchanged and substituted empty', () => {
+    const a = attendees(11)
+    const ids = a.map((x) => x.playerId)
+    const round = { ...schedule(a, 2)[0], status: 'active' as const }
+    const gone = round.sitting[0]
+    const out = substituteInRound(round, without(ids, gone), 2, emptyHistory(), mulberry32(1))
+    expect(out.courts).toEqual(round.courts)
+    expect(out.sitting).toEqual(round.sitting.filter((p) => p !== gone))
+    expect(out.substituted).toEqual([])
+  })
+
+  it('returns the same object when nobody has been removed', () => {
+    const a = attendees(9)
+    const round = schedule(a, 2)[0]
+    expect(substituteInRound(round, a.map((x) => x.playerId), 2, emptyHistory(), mulberry32(1))).toBe(round)
+  })
+
+  it('removing an on-court player when players sit: one sitter fills that exact slot, all else identical', () => {
+    const a = attendees(11)
+    const ids = a.map((x) => x.playerId)
+    const rounds = schedule(a, 2)
+    // Round 3 is in play; rounds 1 and 2 are history.
+    const round = { ...rounds[2], status: 'active' as const }
+    const history = historyBefore(rounds, 2)
+    const gone = round.courts[1].teamB[0]
+    const out = substituteInRound(round, without(ids, gone), 2, history, mulberry32(1))
+
+    expect(out.courts).toHaveLength(2)
+    expect(out.courts[0]).toEqual(round.courts[0])
+    expect(out.courts[1].teamA).toEqual(round.courts[1].teamA)
+    expect(out.courts[1].teamB[1]).toBe(round.courts[1].teamB[1])
+    const filler = out.courts[1].teamB[0]
+    expect(round.sitting).toContain(filler)
+    expect(out.sitting).toEqual(round.sitting.filter((p) => p !== filler))
+    expect(out.substituted).toEqual([filler])
+    expect([...playersOnCourt(out), ...out.sitting]).not.toContain(gone)
+  })
+
+  it('the filler is the sitter with fewest games, then who sat most recently', () => {
+    const round: Round = {
+      index: 5,
+      status: 'active',
+      locked: false,
+      courts: [{ court: 1, teamA: ['a', 'b'], teamB: ['c', 'd'] }],
+      sitting: ['x', 'y', 'z'],
+      substituted: [],
+    }
+    const h = emptyHistory()
+    h.games.set('x', 4).set('y', 3).set('z', 3)
+    h.lastSat.set('y', 1).set('z', 4)
+    const out = substituteInRound(round, ['a', 'b', 'c', 'x', 'y', 'z'], 1, h, mulberry32(1))
+    expect(out.courts[0].teamB).toEqual(['c', 'z'])
+    expect(out.sitting).toEqual(['x', 'y'])
+    expect(out.substituted).toEqual(['z'])
+  })
+
+  it('nobody sits and the court count drops (8 to 7 on 2 courts): 1 court, 3 sitting, changed players marked', () => {
+    const a = attendees(8)
+    const ids = a.map((x) => x.playerId)
+    const round = { ...schedule(a, 2)[0], status: 'active' as const }
+    const gone = 'p3'
+    const out = substituteInRound(round, without(ids, gone), 2, emptyHistory(), mulberry32(1))
+
+    expect(out.courts).toHaveLength(1)
+    expect(out.sitting).toHaveLength(3)
+    const all = [...playersOnCourt(out), ...out.sitting].sort()
+    expect(all).toEqual(without(ids, gone).sort())
+
+    const slotBefore = new Map<string, string>()
+    for (const c of round.courts) {
+      for (const p of c.teamA) slotBefore.set(p, `${c.court}A`)
+      for (const p of c.teamB) slotBefore.set(p, `${c.court}B`)
+    }
+    const changed: string[] = []
+    for (const c of out.courts) {
+      for (const p of c.teamA) if (slotBefore.get(p) !== `${c.court}A`) changed.push(p)
+      for (const p of c.teamB) if (slotBefore.get(p) !== `${c.court}B`) changed.push(p)
+    }
+    expect(out.substituted).toEqual(changed.sort())
+    expect(out.substituted).not.toContain(gone)
+  })
+
+  it('a re-solve keeps an existing pair together when it can', () => {
+    const round: Round = {
+      index: 0,
+      status: 'active',
+      locked: false,
+      courts: [
+        { court: 1, teamA: ['a', 'b'], teamB: ['c', 'd'] },
+        { court: 2, teamA: ['e', 'f'], teamB: ['g', 'h'] },
+      ],
+      sitting: [],
+      substituted: [],
+    }
+    // Everyone equal on games; pin who plays via the history so only the pairing is free.
+    const h = emptyHistory()
+    for (const p of ['e', 'f', 'g']) h.games.set(p, 1)
+    const out = substituteInRound(round, ['a', 'b', 'c', 'd', 'e', 'f', 'g'], 2, h, mulberry32(3))
+    expect(out.courts).toHaveLength(1)
+    expect(playersOnCourt(out).sort()).toEqual(['a', 'b', 'c', 'd'])
+    const teams = out.courts[0]
+    expect([pairKey(...teams.teamA), pairKey(...teams.teamB)].sort()).toEqual([pairKey('a', 'b'), pairKey('c', 'd')].sort())
+    expect(out.substituted).toEqual([])
+  })
+
+  it('a late arrival during the round (not yet in it) is a substitution candidate', () => {
+    const round: Round = {
+      index: 0,
+      status: 'active',
+      locked: false,
+      courts: [
+        { court: 1, teamA: ['a', 'b'], teamB: ['c', 'd'] },
+        { court: 2, teamA: ['e', 'f'], teamB: ['g', 'h'] },
+      ],
+      sitting: [],
+      substituted: [],
+    }
+    // h left, m arrived after the round started: 8 active on 2 courts, m fills h's slot.
+    const out = substituteInRound(round, ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'm'], 2, emptyHistory(), mulberry32(1))
+    expect(out.courts[0]).toEqual(round.courts[0])
+    expect(out.courts[1]).toEqual({ court: 2, teamA: ['e', 'f'], teamB: ['g', 'm'] })
+    expect(out.sitting).toEqual([])
+    expect(out.substituted).toEqual(['m'])
+    expect(playersOnCourt(out)).not.toContain(OPEN_SLOT)
+  })
+
+  it('accumulates marks across successive removals and drops marks for players no longer on court', () => {
+    const a = attendees(12)
+    const ids = a.map((x) => x.playerId)
+    const round = { ...schedule(a, 2)[0], status: 'active' as const }
+    const first = substituteInRound(round, without(ids, round.courts[0].teamA[0]), 2, emptyHistory(), mulberry32(1))
+    expect(first.substituted).toHaveLength(1)
+    const second = substituteInRound(first, without(without(ids, round.courts[0].teamA[0]), first.courts[1].teamB[1]), 2, emptyHistory(), mulberry32(2))
+    expect(second.substituted).toHaveLength(2)
+    expect(second.substituted).toContain(first.substituted[0])
+  })
+})
+
+describe('rebuildSchedule with freeze', () => {
+  it('keeps a frozen index as-is even when pending and unlocked', () => {
+    const a = attendees(9)
+    const first = schedule(a, 2)
+    const rebuilt = rebuildSchedule({
+      venueCourts: 2,
+      roundCount: 12,
+      attendees: [...a, { playerId: 'p10', arrived: true }],
+      rounds: first,
+      seed: 5,
+      freeze: [0],
+    })
+    expect(rebuilt[0]).toBe(first[0])
+    expect([...playersOnCourt(rebuilt[1]), ...rebuilt[1].sitting]).toContain('p10')
   })
 })

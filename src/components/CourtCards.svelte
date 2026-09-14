@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Round } from '../lib/types'
+  import { OPEN_SLOT } from '../lib/scheduler'
   import { playerName } from '../lib/store.svelte'
 
   let {
@@ -15,7 +16,20 @@
     onplayer?: (id: string) => void
     selected?: string | null
   } = $props()
+
+  const subs = $derived(new Set(round.substituted))
 </script>
+
+{#snippet chip(id: string)}
+  {#if id === OPEN_SLOT}
+    <span class="name open" aria-label="Open slot, nobody available">— open —</span>
+  {:else}
+    <button class="name" class:selected={selected === id} class:sub={subs.has(id)} disabled={!onplayer} onclick={() => onplayer?.(id)}>
+      {playerName(id)}
+      {#if subs.has(id)}<span class="in" aria-hidden="true">in</span><span class="sr-only"> (substituted in)</span>{/if}
+    </button>
+  {/if}
+{/snippet}
 
 {#if round.courts.length === 0}
   <div class="card notice" class:large>
@@ -33,14 +47,14 @@
       <h3>Court {c.court}</h3>
       <div class="teams">
         <div class="team">
-          {#each c.teamA as id (id)}
-            <button class="name" class:selected={selected === id} disabled={!onplayer} onclick={() => onplayer?.(id)}>{playerName(id)}</button>
+          {#each c.teamA as id, i (i)}
+            {@render chip(id)}
           {/each}
         </div>
         <div class="vs">vs</div>
         <div class="team">
-          {#each c.teamB as id (id)}
-            <button class="name" class:selected={selected === id} disabled={!onplayer} onclick={() => onplayer?.(id)}>{playerName(id)}</button>
+          {#each c.teamB as id, i (i)}
+            {@render chip(id)}
           {/each}
         </div>
       </div>
@@ -82,7 +96,8 @@
   }
   .teams {
     display: grid;
-    grid-template-columns: 1fr auto 1fr;
+    /* minmax(0, …) so long names shrink (ellipsis) instead of widening the card. */
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
     gap: 0.5rem;
     align-items: center;
   }
@@ -90,6 +105,7 @@
     display: flex;
     flex-direction: column;
     gap: 0.4rem;
+    min-width: 0;
   }
   .vs {
     color: var(--muted);
@@ -117,6 +133,36 @@
   .name.selected {
     outline: 3px solid var(--accent);
     outline-offset: 1px;
+  }
+  /* Player put on court by a mid-round substitution. */
+  .name.sub {
+    background: var(--sub-soft);
+    border: 2px solid var(--sub);
+    color: var(--fg);
+  }
+  .in {
+    display: inline-block;
+    margin-left: 0.4em;
+    padding: 0 0.45em;
+    border-radius: 999px;
+    background: var(--sub);
+    color: #fff;
+    font-size: 0.7em;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    vertical-align: 0.1em;
+  }
+  /* Vacated slot with nobody to fill it. */
+  .name.open {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px dashed var(--line);
+    border-radius: var(--radius);
+    background: transparent;
+    color: var(--muted);
+    font-weight: 500;
   }
   .sitting h3 {
     color: var(--muted);

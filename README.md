@@ -1,9 +1,10 @@
 # Pickleball Fixtures
 
 An offline-first Progressive Web App for a pickleball club convenor. On a phone or
-tablet at the venue: enter who said they would come, tick people off as they
-arrive, and get 12 rounds of 10-minute doubles fixtures across the courts in use,
-regenerated live as people arrive late or leave early.
+tablet at the venue: build today's list from the names who said they would come
+(the club has 60+ members, so the roster is never shown as a list to pick from),
+tick people off as they arrive, and get 12 rounds of 10-minute doubles fixtures
+across the courts in use, regenerated live as people arrive late or leave early.
 
 Live: **https://keendeli.github.io/pickleball-fixtures/**
 
@@ -34,8 +35,21 @@ Venues are fixed in code (`src/lib/venues.ts`):
 - A round that has been started or finished is frozen. When attendance changes,
   only rounds not yet started are recomputed, carrying forward games played
   and partner/opponent history from the frozen rounds.
+- **Removing a player from the current round** (Left on the Rounds screen,
+  un-ticking Arrived or ✕ on Check-in, or a Rest that applies to this round)
+  takes effect now, even mid-round, with minimal disruption: if the court
+  count is unchanged, every other assignment stays put and the best available
+  sitter (fewest games, then who sat out most recently) fills the vacated
+  slot. If the court count drops (8 on 2 courts becomes 7 on 1), the round is
+  re-solved for the remaining players with a preference for keeping existing
+  pairs together. Players who moved onto a court or team they were not on
+  before are highlighted in amber with an "IN" marker on the Rounds and
+  Display screens so the convenor can call out the change. The marks clear
+  when the round finishes or a later arrival regenerates a not-yet-started
+  round. Locked rounds get the same treatment: the lock keeps everything else.
 - "Rest" applies to one round and then clears. "Left" removes a player from
-  every later round (and can be undone from Check-in).
+  the current round onward and can be undone from Check-in; a player who
+  leaves during a round is recorded as having last played the previous one.
 - The convenor can swap any two players within a round (including someone
   sitting out) and lock a round so regeneration leaves it alone. A swap on a
   not-yet-started round locks it automatically, otherwise the next
@@ -62,6 +76,13 @@ Venues are fixed in code (`src/lib/venues.ts`):
    are recomputed. The rebuild is run from a handful of seeds and the schedule
    with the lowest total penalty is kept, which is what gets 8 players through
    7 rounds with no repeated partner.
+6. **Substitution**: before the rebuild, the store checks the current round
+   and every later frozen round for players who are no longer active. Each
+   such round goes through `substituteInRound`, which fills vacated slots (or
+   re-solves the round with a pair-keeping penalty of 4 per split pair when
+   the court count changes) and records the fillers in `round.substituted`.
+   The current round is then held for that rebuild even if it is pending and
+   unlocked, so the substitution is what the convenor sees.
 
 Everything is deterministic for a given seed, so the tests are stable and
 toggling a player off and on again gives the same fixtures back.
@@ -69,10 +90,16 @@ toggling a player off and on again gives the same fixtures back.
 ## Screens
 
 1. **Start** — three numbered steps on one page: (1) pick a venue, set rounds
-   and minutes; (2) tick who is coming today from the club roster shown inline,
-   adding new names as needed; (3) "Start session with N players". Selected
-   players go into the session as Expected. Offers Resume if a session is
-   stored. A small link opens the Roster screen for renames and removals.
+   and minutes; (2) build **today's players**: type a name and pick it from
+   the roster type-ahead (or add it as a new player), then tap Arrived against
+   each person as they turn up; ✕ takes someone off today's list without
+   touching the roster, and Clear list (with a one-tap confirm) empties it;
+   (3) "Start session with M arrived". Today's list is saved on the device, so
+   the convenor can build it the night before from TeamReach and open the app
+   at the venue. On start, everyone on the list becomes an attendee, those
+   ticked go straight into round 1 and the rest are Expected at Check-in; the
+   list is then cleared. Offers Resume if a session is stored. A small link
+   opens the Roster screen for renames and removals.
 2. **Check-in** — type-ahead add from the roster (a new name is added to the
    roster), big Arrived toggles, counts of arrived / on court / sitting for the
    current round. Players can be added and ticked at any time during the session.
@@ -114,5 +141,8 @@ Pages artifact and deploys it. GitHub Pages is configured with the
 
 Stored facts only; anything derivable is recomputed. See `src/lib/types.ts`:
 `Player`, `Venue`, `Session` (attendees with `arrived`, `leftAfterRound`,
-`restingRound`; rounds with `status`, `locked`, `courts`, `sitting`, `endsAt`).
-The document carries a `schemaVersion` for future migrations.
+`restingRound`; rounds with `status`, `locked`, `courts`, `sitting`,
+`substituted`, `endsAt`) and `today` (the Start screen's draft list of
+`{ playerId, arrived, arrivedAt? }`). The document carries a `schemaVersion`
+(currently 2; v1 documents gain an empty `today` and empty `substituted`
+arrays on load).

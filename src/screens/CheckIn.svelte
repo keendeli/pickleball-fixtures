@@ -131,7 +131,10 @@
     <div class="stack">
       {#each sortedByName(gone) as a (a.playerId)}
         <div class="card row" style="margin: 0">
-          <span class="grow muted">{playerName(a.playerId)} <span class="pill">after R{(a.leftAfterRound ?? 0) + 1}</span></span>
+          <span class="grow muted">
+            {playerName(a.playerId)}
+            <span class="pill">{(a.leftAfterRound ?? -1) < 0 ? 'before R1' : `after R${(a.leftAfterRound ?? 0) + 1}`}</span>
+          </span>
           <button class="small" onclick={() => unmarkLeft(a.playerId)}>Back in</button>
         </div>
       {/each}

@@ -1,10 +1,10 @@
 import type { AppState } from './types'
 
 export const STORAGE_KEY = 'pickleball-fixtures'
-export const SCHEMA_VERSION = 1
+export const SCHEMA_VERSION = 2
 
 export function emptyState(): AppState {
-  return { schemaVersion: SCHEMA_VERSION, roster: [], session: null }
+  return { schemaVersion: SCHEMA_VERSION, roster: [], session: null, today: [] }
 }
 
 /** Upgrade older documents in place. Add a case per schema bump. */
@@ -14,7 +14,13 @@ function migrate(doc: Record<string, unknown>): AppState {
     // Written by a newer build; keep what we understand.
     return { ...emptyState(), ...doc, schemaVersion: SCHEMA_VERSION } as AppState
   }
-  return { ...emptyState(), ...doc, schemaVersion: SCHEMA_VERSION } as AppState
+  const state = { ...emptyState(), ...doc, schemaVersion: SCHEMA_VERSION } as AppState
+  if (version < 2) {
+    // v2: today's list on the Start screen, and per-round substitution marks.
+    if (!Array.isArray(state.today)) state.today = []
+    for (const r of state.session?.rounds ?? []) if (!Array.isArray(r.substituted)) r.substituted = []
+  }
+  return state
 }
 
 export function loadState(storage: Storage | undefined = globalThis.localStorage): AppState {

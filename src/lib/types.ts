@@ -36,6 +36,12 @@ export interface Round {
   locked: boolean
   courts: CourtFixture[]
   sitting: string[]
+  /**
+   * Players on court now who were put there by a substitution after the round
+   * was generated (someone left, un-arrived or rested mid-round). Cleared when
+   * the round finishes or a full regeneration replaces the round.
+   */
+  substituted: string[]
   startedAt?: string // ISO
   endsAt?: string // ISO
   /** Remaining ms captured when paused; absent when running or not started. */
@@ -55,8 +61,17 @@ export interface Session {
   seed: number
 }
 
+/** A player on today's list, built on the Start screen before the session begins. */
+export interface TodayEntry {
+  playerId: string
+  arrived: boolean
+  arrivedAt?: string // ISO
+}
+
 export interface AppState {
   schemaVersion: number
   roster: Player[]
   session: Session | null
+  /** Draft attendance for the next session. Persists until a session is started or ended. */
+  today: TodayEntry[]
 }

@@ -11,6 +11,10 @@ import { mulberry32, shuffle, type Rng } from './rng'
 
 export const PARTNER_REPEAT_PENALTY = 10
 export const OPPONENT_REPEAT_PENALTY = 3
+/** Applied per existing pair split up when a round is re-solved after a removal. */
+export const PAIR_BREAK_PENALTY = 4
+/** Court slot left empty by a removal when nobody is available to fill it. */
+export const OPEN_SLOT = ''
 const ARRANGEMENT_STARTS = 12
 const SCHEDULE_RESTARTS = 6
 
@@ -21,6 +25,8 @@ export interface ScheduleInput {
   /** Existing rounds; those with status !== 'pending' or locked are frozen. */
   rounds: Round[]
   seed: number
+  /** Extra round indexes to keep as-is for this rebuild (a just-substituted current round). */
+  freeze?: number[]
 }
 
 /** Mutable tallies carried across rounds. */
@@ -42,6 +48,17 @@ export function pairKey(a: string, b: string): string {
 
 function bump(map: Map<string, number>, key: string): void {
   map.set(key, (map.get(key) ?? 0) + 1)
+}
+
+function slotPlayers(c: CourtFixture): string[] {
+  return [...c.teamA, ...c.teamB].filter((p) => p !== OPEN_SLOT)
+}
+
+function addPairFacts(history: History, c: CourtFixture): void {
+  if (c.teamA[0] !== OPEN_SLOT && c.teamA[1] !== OPEN_SLOT) bump(history.partners, pairKey(c.teamA[0], c.teamA[1]))
+  if (c.teamB[0] !== OPEN_SLOT && c.teamB[1] !== OPEN_SLOT) bump(history.partners, pairKey(c.teamB[0], c.teamB[1]))
+  for (const a of c.teamA)
+    for (const b of c.teamB) if (a !== OPEN_SLOT && b !== OPEN_SLOT) bump(history.opponents, pairKey(a, b))
 }
 
 export function courtsUsed(venueCourts: number, activePlayers: number): number {
@@ -70,18 +87,23 @@ export function presentPlayersForRound(attendees: Attendee[], roundIndex: number
 }
 
 export function playersOnCourt(round: Round): string[] {
-  return round.courts.flatMap((c) => [...c.teamA, ...c.teamB])
+  return round.courts.flatMap(slotPlayers)
 }
 
-/** Add one round's facts to the history tallies. */
+/** Add one round's facts to the history tallies. Open slots carry no facts. */
 export function applyRound(history: History, round: Round): void {
   for (const c of round.courts) {
-    for (const p of [...c.teamA, ...c.teamB]) bump(history.games, p)
-    bump(history.partners, pairKey(c.teamA[0], c.teamA[1]))
-    bump(history.partners, pairKey(c.teamB[0], c.teamB[1]))
-    for (const a of c.teamA) for (const b of c.teamB) bump(history.opponents, pairKey(a, b))
+    for (const p of slotPlayers(c)) bump(history.games, p)
+    addPairFacts(history, c)
   }
   for (const p of round.sitting) history.lastSat.set(p, round.index)
+}
+
+/** Tallies from every round before `index` (they are all frozen by then). */
+export function historyBefore(rounds: Round[], index: number): History {
+  const h = emptyHistory()
+  for (const r of rounds) if (r.index < index) applyRound(h, r)
+  return h
 }
 
 /**
@@ -111,13 +133,29 @@ export function selectPlayers(
   return { playing: ranked.slice(0, playingCount), sitting: ranked.slice(playingCount).sort() }
 }
 
-export function scoreCourts(courts: CourtFixture[], history: History): number {
+/**
+ * Penalty for an arrangement. `keepPairs` (pair keys of teams that already
+ * exist in the round being re-solved) adds PAIR_BREAK_PENALTY for each such
+ * pair whose two players are both playing but no longer partnered.
+ */
+export function scoreCourts(courts: CourtFixture[], history: History, keepPairs?: Set<string>): number {
   let score = 0
+  const teams = keepPairs ? new Set<string>() : undefined
   for (const c of courts) {
-    score += PARTNER_REPEAT_PENALTY * (history.partners.get(pairKey(c.teamA[0], c.teamA[1])) ?? 0)
-    score += PARTNER_REPEAT_PENALTY * (history.partners.get(pairKey(c.teamB[0], c.teamB[1])) ?? 0)
+    const ka = pairKey(c.teamA[0], c.teamA[1])
+    const kb = pairKey(c.teamB[0], c.teamB[1])
+    score += PARTNER_REPEAT_PENALTY * (history.partners.get(ka) ?? 0)
+    score += PARTNER_REPEAT_PENALTY * (history.partners.get(kb) ?? 0)
     for (const a of c.teamA)
       for (const b of c.teamB) score += OPPONENT_REPEAT_PENALTY * (history.opponents.get(pairKey(a, b)) ?? 0)
+    teams?.add(ka).add(kb)
+  }
+  if (keepPairs && teams) {
+    const playing = new Set(courts.flatMap((c) => [...c.teamA, ...c.teamB]))
+    for (const k of keepPairs) {
+      const [a, b] = k.split('|')
+      if (playing.has(a) && playing.has(b) && !teams.has(k)) score += PAIR_BREAK_PENALTY
+    }
   }
   return score
 }
@@ -145,20 +183,21 @@ export function bestArrangement(
   history: History,
   rng: Rng,
   starts = ARRANGEMENT_STARTS,
+  keepPairs?: Set<string>,
 ): { courts: CourtFixture[]; score: number } {
   let best = toCourts(playing)
-  let bestScore = scoreCourts(best, history)
+  let bestScore = scoreCourts(best, history, keepPairs)
   const n = playing.length
   for (let s = 0; s < starts && bestScore > 0; s++) {
     const order = shuffle(playing, rng)
-    let score = scoreCourts(toCourts(order), history)
+    let score = scoreCourts(toCourts(order), history, keepPairs)
     let improved = true
     while (improved && score > 0) {
       improved = false
       for (let i = 0; i < n - 1; i++) {
         for (let j = i + 1; j < n; j++) {
           ;[order[i], order[j]] = [order[j], order[i]]
-          const candidate = scoreCourts(toCourts(order), history)
+          const candidate = scoreCourts(toCourts(order), history, keepPairs)
           if (candidate < score) {
             score = candidate
             improved = true
@@ -188,13 +227,13 @@ export function buildRound(
   const { playing, sitting } = selectPlayers(active, courts * 4, history, rng)
   const { courts: fixtures, score } = bestArrangement(playing, history, rng)
   return {
-    round: { index, status: 'pending', locked: false, courts: fixtures, sitting },
+    round: { index, status: 'pending', locked: false, courts: fixtures, sitting, substituted: [] },
     score,
   }
 }
 
 function emptyRound(index: number): Round {
-  return { index, status: 'pending', locked: false, courts: [], sitting: [] }
+  return { index, status: 'pending', locked: false, courts: [], sitting: [], substituted: [] }
 }
 
 /**
@@ -204,11 +243,13 @@ function emptyRound(index: number): Round {
 export function rebuildSchedule(input: ScheduleInput): Round[] {
   const existing = new Map<number, Round>()
   for (const r of input.rounds) existing.set(r.index, r)
+  const extraFrozen = new Set(input.freeze ?? [])
+  const keep = (r: Round): boolean => isFrozen(r) || extraFrozen.has(r.index)
 
   const frozen: Round[] = []
   for (let i = 0; i < input.roundCount; i++) {
     const r = existing.get(i)
-    if (r && isFrozen(r)) frozen.push(r)
+    if (r && keep(r)) frozen.push(r)
   }
 
   let bestRounds: Round[] | null = null
@@ -219,21 +260,15 @@ export function rebuildSchedule(input: ScheduleInput): Round[] {
     const history = emptyHistory()
     // Partner/opponent facts are order-independent: seed them from every frozen
     // round so a locked later round steers earlier recomputed rounds too.
-    for (const r of frozen) {
-      for (const c of r.courts) {
-        bump(history.partners, pairKey(c.teamA[0], c.teamA[1]))
-        bump(history.partners, pairKey(c.teamB[0], c.teamB[1]))
-        for (const a of c.teamA) for (const b of c.teamB) bump(history.opponents, pairKey(a, b))
-      }
-    }
+    for (const r of frozen) for (const c of r.courts) addPairFacts(history, c)
     const rounds: Round[] = []
     let total = 0
     for (let i = 0; i < input.roundCount; i++) {
       const r = existing.get(i)
-      if (r && isFrozen(r)) {
+      if (r && keep(r)) {
         rounds.push(r)
         // Games / sit-outs are ordered facts: count them as we pass the round.
-        for (const c of r.courts) for (const p of [...c.teamA, ...c.teamB]) bump(history.games, p)
+        for (const c of r.courts) for (const p of slotPlayers(c)) bump(history.games, p)
         for (const p of r.sitting) history.lastSat.set(p, r.index)
         continue
       }
@@ -253,6 +288,90 @@ export function rebuildSchedule(input: ScheduleInput): Round[] {
     }
   }
   return bestRounds ?? []
+}
+
+type Slot = { court: number; side: 'A' | 'B' }
+
+function slotMap(round: Round): Map<string, Slot> {
+  const m = new Map<string, Slot>()
+  for (const c of round.courts) {
+    for (const p of c.teamA) if (p !== OPEN_SLOT) m.set(p, { court: c.court, side: 'A' })
+    for (const p of c.teamB) if (p !== OPEN_SLOT) m.set(p, { court: c.court, side: 'B' })
+  }
+  return m
+}
+
+function sameTeam(a: Slot | undefined, b: Slot): boolean {
+  return a !== undefined && a.court === b.court && a.side === b.side
+}
+
+/**
+ * Re-solve a round after one or more of its players stopped being active
+ * (left, un-arrived, resting), with minimal disruption. Returns the same
+ * object when nothing in the round needs to change.
+ *
+ * - Court count unchanged: every other assignment is kept and each vacated
+ *   slot is filled by the best available non-court player (fewest games,
+ *   then sat out most recently, then seeded random — the same ranking that
+ *   picks who plays each round). With nobody available the slot stays open.
+ * - Court count changed: the round is rebuilt for the remaining players,
+ *   preferring arrangements that keep existing pairs together.
+ *
+ * `substituted` lists everyone on court afterwards who was not on that same
+ * court and team before, unioned with any earlier marks still on court.
+ */
+export function substituteInRound(
+  round: Round,
+  active: string[],
+  venueCourts: number,
+  history: History,
+  rng: Rng,
+): Round {
+  const activeSet = new Set(active)
+  const before = slotMap(round)
+  const removed = [...before.keys(), ...round.sitting].filter((p) => !activeSet.has(p))
+  if (removed.length === 0) return round
+
+  const removedSet = new Set(removed)
+  const onCourtNow = [...before.keys()].filter((p) => !removedSet.has(p))
+  const pool = active.filter((p) => !before.has(p)) // sitting, or arrived mid-round
+  const courts = courtsUsed(venueCourts, active.length)
+
+  let fixtures: CourtFixture[]
+  let sitting: string[]
+  if (courts === round.courts.length) {
+    const ranked = selectPlayers(pool, pool.length, history, rng).playing
+    let next = 0
+    fixtures = round.courts.map((c) => {
+      // courtsUsed only holds the court count when active >= 4 * courts, so the
+      // pool always covers the vacated slots; OPEN_SLOT is a guard, not a path.
+      const fill = (p: string): string => (removedSet.has(p) ? (ranked[next++] ?? OPEN_SLOT) : p)
+      return { court: c.court, teamA: [fill(c.teamA[0]), fill(c.teamA[1])], teamB: [fill(c.teamB[0]), fill(c.teamB[1])] }
+    })
+    sitting = ranked.slice(next).sort()
+  } else {
+    const keepPairs = new Set<string>()
+    for (const c of round.courts)
+      for (const t of [c.teamA, c.teamB]) if (!t.some((p) => removedSet.has(p) || p === OPEN_SLOT)) keepPairs.add(pairKey(t[0], t[1]))
+    const remaining = [...onCourtNow, ...pool]
+    const picked = selectPlayers(remaining, courts * 4, history, rng)
+    fixtures = bestArrangement(picked.playing, history, rng, ARRANGEMENT_STARTS, keepPairs).courts
+    sitting = picked.sitting
+    // Team sides carry no meaning: orient each court so the most players keep their side.
+    fixtures = fixtures.map((c) => {
+      const stay = (side: 'A' | 'B', team: [string, string]) => team.filter((p) => sameTeam(before.get(p), { court: c.court, side })).length
+      const asIs = stay('A', c.teamA) + stay('B', c.teamB)
+      const flipped = stay('B', c.teamA) + stay('A', c.teamB)
+      return flipped > asIs ? { court: c.court, teamA: c.teamB, teamB: c.teamA } : c
+    })
+  }
+
+  const result: Round = { ...round, courts: fixtures, sitting, substituted: [] }
+  const after = slotMap(result)
+  const marks = new Set(round.substituted.filter((p) => after.has(p)))
+  for (const [p, slot] of after) if (!sameTeam(before.get(p), slot)) marks.add(p)
+  result.substituted = [...marks].sort()
+  return result
 }
 
 /** Games played per player across the given rounds. */

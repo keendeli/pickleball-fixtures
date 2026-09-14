@@ -163,6 +163,12 @@
       </div>
     {/if}
 
+    {#if round.substituted.length > 0}
+      <p class="subnote" aria-live="polite">
+        Substituted in: {round.substituted.map(playerName).join(', ')}
+      </p>
+    {/if}
+
     <CourtCards {round} {activeCount} onplayer={round.status === 'done' ? undefined : onPlayer} selected={swapFrom} />
 
     <div class="row wrap" style="margin-top: 0.4rem">
@@ -176,6 +182,10 @@
     {#if round.status === 'pending'}
       <p class="muted" style="margin-top: 0.6rem; font-size: 0.9rem">
         Tap a name to swap, rest or mark as left. A swap locks the round so regeneration keeps it.
+      </p>
+    {:else if round.status === 'active'}
+      <p class="muted" style="margin-top: 0.6rem; font-size: 0.9rem">
+        Tap a name to swap or mark as left. Someone who leaves mid-round is replaced from the sitters and the replacement is highlighted.
       </p>
     {/if}
   {/if}
@@ -213,6 +223,14 @@
   .timeup {
     background: var(--warn-soft);
     border-color: var(--warn);
+  }
+  .subnote {
+    margin: 0 0 0.6rem;
+    padding: 0.4rem 0.8rem;
+    border-radius: var(--radius);
+    background: var(--sub-soft);
+    border: 1px solid var(--sub);
+    font-weight: 600;
   }
   .banner {
     background: var(--accent-soft);
