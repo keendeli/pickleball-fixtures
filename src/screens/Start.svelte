@@ -12,6 +12,7 @@
   } from '../lib/store.svelte'
   import { VENUES, venueById } from '../lib/venues'
   import { primeAudio } from '../lib/device'
+  import InstallButton from '../components/InstallButton.svelte'
 
   let { onstarted, onroster }: { onstarted: () => void; onroster: () => void } = $props()
 
@@ -219,6 +220,8 @@
       {/if}
     </button>
   </section>
+
+  <InstallButton />
 </main>
 
 <style>

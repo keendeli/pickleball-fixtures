@@ -12,6 +12,16 @@ No backend, no accounts, no analytics. All state lives in `localStorage` on the
 device (one versioned JSON document). The club roster persists across sessions.
 Install it to the home screen and it works with no signal.
 
+## Install to the home screen
+
+Open the live URL in the browser and use the small **Add to home screen** link
+at the bottom of the Start screen. On Android and desktop Chrome/Edge it opens
+the browser's install dialog; on iPhone/iPad it shows the Safari steps (Share,
+then "Add to Home Screen"), because Safari has no install prompt. The link is
+only shown in a browser tab: it disappears once the app is installed, and
+browsers with no install path (Firefox, desktop Safari) never see it. The
+installed app runs standalone, full-screen, and offline.
+
 ## Venues
 
 Venues are fixed in code (`src/lib/venues.ts`):
